@@ -1,10 +1,5 @@
 ---
-title: "FA 582-A Final Project: EDA"
-author: "Payal Motwani | Mansi Thothawala | Khyati Joshi | Bhavi Kevadia"
-date: "2022-11-19"
-output:
-  word_document: default
-  html_document: default
+
 ---
 
 ### Read Data

@@ -1,0 +1,432 @@
+---
+title: "FA 582-A Final Project: EDA"
+author: "Payal Motwani | Mansi Thothawala | Khyati Joshi | Bhavi Kevadia"
+date: "2022-11-19"
+output:
+  word_document: default
+  html_document: default
+---
+
+### Read Data
+
+```{r}
+library(openxlsx)
+library(tidyverse)
+#gc()
+# Get working directory
+getwd()
+# Set directory where data set lies
+
+ setwd("C:/Users/payal/OneDrive/Documents/582")
+
+# Set option to overwrite scientific notation
+options(scipen = 100)
+
+# Read data
+data <- read.xlsx("Online Retail.xlsx")
+nrow(data)
+head(data)
+summary(data)
+```
+
+### Data Cleaning
+
+```{r}
+# Finding NA values
+total_na <- sapply(data, function(x)
+  sum(is.na(x)))
+total_na
+
+# Percentage of NAs calculated
+pct_na <- (total_na / nrow(data)) * 100
+pct_na
+## Inference: We see that 0.26% of item description is NA, which can be ignored. 25% of Customer IDs are missing but can be addressed during EDA and data balancing/cleaning.
+
+# Converting Invoice date to proper format
+data$InvoiceDate <- convertToDateTime(data$InvoiceDate)
+data$InvoiceDate <- as.Date(data$InvoiceDate)
+
+
+# On observing the customer ID column we see that 25% of entries are empty, thus removing them (serves redundancy for clustering)
+## Almost 25% of customer id data is missing
+## Creating a new binary column that identifies missing values
+## 1 indicates null cust id, 0 otherwise
+
+
+data$null_id <- factor(as.character(is.na(data$CustomerID)), 
+                       labels = c(0,1))
+
+## Creating a new temporary dataframe with null cust id
+tmp_data <- data[data$null_id==1,]
+
+## On further data analysis, we notice that invoice numbers are repeated
+unq <- length(unique(tmp_data$InvoiceNo))
+unq
+
+## Total number of orders in the missing cust id data are 3710
+## We assumed that missing cust id orders were not made by exiting customers
+## Since it would have been included in exisitng invoice number itself.
+## We decided to assign new unique customer id, this will be treated as new customer for each unique order
+## We will use invoice number as cust id for missing value
+
+
+data$CustomerID[is.na(data$CustomerID)] <- data$InvoiceNo[is.na(data$CustomerID)]
+
+library(ggrepel)
+data$CustomerID <- gsub("[^[:digit:]]", "", data$CustomerID)
+
+data$CustomerID <- as.numeric(data$CustomerID)
+
+
+##removing null id because we dont need it anymore
+data <- data[,-9]
+
+# On observing, unit price showed 0 in some cases, where the description pointed towards malformed entry
+# Calculating % rows with unit price 0
+pct_zero_unit_price = (nrow(data[data$UnitPrice <= 0, ]) / nrow(data)) * 100
+pct_zero_unit_price
+# Inference: As rows with 0 unit price are <1% (insignificant), removing them
+data <- data[data$UnitPrice > 0, ]
+
+# On observing, quantity showed negative values in some cases, where the description pointed towards malformed entry
+# Calculating % rows with quantity < 0
+pct_neg_quantity = (nrow(data[data$Quantity <= 0, ]) / nrow(data)) * 100
+pct_neg_quantity
+# Inference: As rows with negative quantity are <1% (insignificant), removing them
+data <- data[data$Quantity > 0, ]
+summary(data)
+
+
+# Converting invoice number to numeric
+data$InvoiceNo <- as.numeric(data$InvoiceNo)
+
+which(is.na(data$InvoiceNo))
+data[which(is.na(data$InvoiceNo)),]
+## Another entry for bad debts was noticed and removed
+
+d<- which(data$Description == "Adjust bad debt")
+
+data <- data[-d,]
+
+## On analyzing Unit Price, we found highest Unit price is actually amazon fees which is not a customer transaction, hence removing it
+e <- which(data$UnitPrice == 13541.33)
+data <- data[-e,]
+
+f <- which(data$Description == "POSTAGE")
+data <- data[-f,]
+
+g <- which(data$Description == "DOTCOM POSTAGE")
+data <- data[-g,]
+
+h <- which(data$Description == "Manual")
+data <- data[-h,]
+
+i <- which(data$Description == "AMAZON FEE")
+data <- data[-i,]
+summary(data)
+
+```
+
+### Exploratory Data Analysis
+
+```{r}
+library(forcats)
+
+## Number of orders by Countries
+bycoun <- data %>%
+  group_by(Country) %>%
+  summarise(sum=sum(Quantity)) %>%
+  mutate(freq = round(sum / sum(sum), 3)) %>%
+  arrange(desc(freq))
+
+bycoun
+
+## Visualizing top 5 countries by sales
+tmpsub <- bycoun %>%
+  arrange(desc(sum)) %>%
+  slice(1:5,  with_ties = FALSE)
+  
+tmpsub
+
+ggplot(tmpsub, aes(y = Country, x = sum, fill = Country))+
+  geom_bar(stat = "identity")+
+  theme(legend.position= "None")+
+  ggtitle("Top 5 countries by Orders")
+
+## We see 83% of the data is of customers from United Kingdom, we will focus on this data to avoid geographical segmentation effects as we are studying behavioral segmentation
+data <- data[data$Country == "United Kingdom",]
+
+# Writing clean data to new file
+#write.xlsx(data, 'CleanData.xlsx')
+
+
+## Number of unique invoices
+unique_invoices <- length(unique(data$InvoiceNo))
+unique_invoices
+
+## Number of unique customers
+unq_cust <- length(unique(data$CustomerID))
+unq_cust
+
+## Number of orders per month
+bymonth <- data %>% 
+  group_by(month = lubridate::floor_date(InvoiceDate, 'month')) %>%
+  summarize(sum = sum(Quantity))
+
+ggplot(bymonth, aes(x = month, y = sum))+
+  geom_line()+
+  ggtitle("Total number of orders per month")+
+  ylab("orders")+
+  theme_classic()
+
+## creating another column to calculate revenue from each transaction
+
+data$revenue <- data$Quantity * data$UnitPrice
+
+summary(data)
+
+## Finding top selling products
+pop <- data%>%
+        group_by(Description)%>%
+        summarise(sum=sum(Quantity))%>%
+        arrange(desc(sum))%>%
+        slice(1:10,  with_ties = FALSE)
+
+ggplot(pop, aes(y= sort(Description), x = sum,fill = Description))+
+  geom_bar(stat = "identity")+
+  theme(legend.position= "None")+
+  ggtitle("Top 10 products sold in UK")
+
+print(paste("Number of transactions in UK are", unique_invoices))
+print(paste("Number of customers in UK are", unq_cust))
+
+```
+
+```{r}
+## Visualizing revenue from customers
+
+plot(data$UnitPrice, data$revenue, main = "Unit Price and Revenue")
+plot(data$UnitPrice, data$revenue, xlim = c(0,50), ylim = c(0,6000),
+     main = "Unit Price and Revenue excluding extreme values")
+
+
+```
+
+
+
+
+```{r}
+
+
+analysis_date <- max(data$InvoiceDate)+1
+rfm_dataframe <- data %>%
+  group_by(CustomerID) %>%
+  summarise(Recency = as.numeric(analysis_date - max(InvoiceDate)),
+            Frequency = n(), 
+            Monetary = sum(revenue))
+nrow(rfm_dataframe)
+
+
+
+library("ggplot2")
+library("gridExtra")
+
+r <- ggplot(rfm_dataframe) + geom_density(aes(x = Recency))
+f <- ggplot(rfm_dataframe) + geom_density(aes(x = Frequency))
+m <- ggplot(rfm_dataframe) + geom_density(aes(x = Monetary))
+grid.arrange(r, f, m, nrow = 3)
+```
+```{r}
+summary(rfm_dataframe)
+#plot(rfm_dataframe$Frequency)
+
+```
+
+### K Means clustering
+```{r}
+#install.packages("factoextra")
+library(factoextra)
+library(stats)
+## Scaling the data for K means clustering
+rfm_norm <- as.data.frame(scale(rfm_dataframe[,c(2,3,4)]))
+summary(rfm_norm)
+
+
+## Calculating number of clusters
+## a) Elbow Method
+set.seed(123)
+fviz_nbclust(rfm_norm, kmeans, method="wss")+
+  geom_vline(xintercept=4,linetype=2) + 
+  labs(subtitle = "Elbow method")
+
+## We observe optimal number of clusters are 3 according to elbow method, now we will use silhouette method to validate the finding
+
+## b) Silhouette method
+fviz_nbclust(rfm_norm,kmeans, method = "silhouette")+
+  labs(subtitle = "Silhouette method") 
+
+
+library(cluster)
+# compute gap statistic
+#set.seed(123)
+#gap_stat <- clusGap(rfm_norm, FUN = kmeans, algorithm = "Lloyd", K.max = 10, B= 50, iter.max=1000)
+
+#fviz_gap_stat(gap_stat) + 
+  #labs(subtitle = "Gap statistic method")
+
+
+#gc()
+
+
+## Optimal k =3
+## computing k means with k =3
+
+set.seed(123)
+km.res <- kmeans(rfm_norm, 4, nstart = 10) 
+
+km.res$centers 
+km.res$size
+
+km.res$betweenss/km.res$totss
+
+
+fviz_cluster(km.res, geom = "point", data = rfm_norm, xlab = FALSE, 
+             ylab = FALSE) + 
+  ggtitle("Clusters with K means clustering K =4")+
+  theme_classic()
+
+```
+
+## K means clustering with four clusters, 
+#### Cluster 1 has 287 customers that have purchased recently and number of transactions are also higher than 75% customers and these spend more money than 75% of customers - "High Value Customer"
+#### Cluster 2 have only 9 customers but this cluster is the best of all clusters, they can be considered loyalist as they spend highest, recently and frequently- "Highest Value Customer"
+
+#### Cluster 3 has 1796 customers these customers are those they have not added a lot of value to retailer, they made a few purchase of smaller amounts long time back- "Low value customer"
+
+#### Cluster 4 has most of the customers these customers have purchased pretty recently, average frequency and average sum spent. These customers have potential to become good customers - "Average Customer"
+```{r}
+library(graphics)
+rfm_data <- cbind(rfm_dataframe,km.res["cluster"])
+rfm_data$cluster <- as.factor(rfm_data$cluster )
+
+
+library(threejs)
+COLS = RColorBrewer::brewer.pal(4,"Set1")
+scatterplot3js(as.matrix(rfm_data[,2:4]),col=COLS[rfm_data$cluster],size=0.3)
+
+rfm_cust <- cbind(rfm_norm, km.res["cluster"])
+rfm_cust$cluster <- as.factor(rfm_cust$cluster )
+
+## Cluster wise plot
+ggplot(data= rfm_cust, aes (x = Recency, y = Frequency, 
+                                  color = cluster))+
+  geom_point()+
+  ggtitle("Clusters with respect to Recency and Frequency")+
+  ylim(0,15)+
+  scale_color_discrete(name = "Clusters", 
+                      labels = c("High Value","Highest Value",
+                                 "Low Value","Average Value"))+
+  theme_classic()
+
+
+
+ggplot(data= rfm_cust, aes (x = Recency, y = Monetary, color = cluster))+
+  geom_point()+
+  ggtitle("Clusters with respect to Recency and Monetary")+
+  ylim(0,10)+
+  scale_color_discrete(name = "Clusters", 
+                      labels = c("High Value","Highest Value",
+                                 "Low Value","Average Value"))+
+  theme_classic()
+
+
+ggplot(data= rfm_cust, aes (x = Monetary, y = Frequency, 
+                            color = cluster))+
+  scale_fill_discrete(name = "Clusters", 
+                      labels = c("High Value","Highest Value",
+                                 "Low Value","Average Value"))+
+  geom_point()+
+  ylim(0,10)+
+  xlim(0,10)+
+  ggtitle("Clusters with respect to Monetary and Frequency")+
+  scale_color_discrete(name = "Clusters", 
+                      labels = c("High Value","Highest Value",
+                                 "Low Value","Average Value"))+
+  theme_classic()
+
+
+
+```
+
+
+
+
+```{r}
+#rfm_scaled <- scale(rfm_dataframe[, -9])
+euclidian_distance <- dist(rfm_norm, method = "euclidean")
+
+# Hierarchical clustering using different linkage methods
+hcl1 <- hclust(euclidian_distance, method = "single")
+hcl2 <- hclust(euclidian_distance, method = "complete")
+hcl3 <- hclust(euclidian_distance, method = "ward.D2")
+hcl4 <- hclust(euclidian_distance, method = "average")
+
+# Set method collection
+methods <- c("average", "single", "complete", "ward")
+names(methods) <- c("average", "single", "complete", "ward")
+
+# function to compute coefficient
+get_ac <- function(x) {
+  agnes(rfm_norm, method = x)$ac
+}
+
+map_dbl(methods, get_ac)
+
+hcl2 <- as.dendrogram(hcl2)
+cd = color_branches(hcl2, k = 4)
+plot(cd)
+
+hcl3 <- as.dendrogram(hcl3)
+cd = color_branches(hcl3, k = 4)
+plot(cd)
+
+# Choosing ward cluster
+ward.clust = cutree(hcl3, k = 4)
+res1 <- cbind(rfm_dataframe, ClusterId = ward.clust)
+res1 <- as.data.frame(res1)
+
+## Visualization => Boxplots to
+a <-
+  ggplot(res1,
+         aes(
+           x = ClusterId,
+           y = Frequency,
+           group = ClusterId,
+           fill = as.factor(ClusterId)
+         )) +
+  geom_boxplot(show.legend = FALSE) + theme_minimal() + scale_fill_brewer(palette = "Set2")
+b <-
+  ggplot(res1,
+         aes(
+           x = ClusterId,
+           y = Monetary,
+           group = ClusterId,
+           fill = as.factor(ClusterId)
+         )) +
+  geom_boxplot(show.legend = FALSE) + theme_minimal() + scale_fill_brewer(palette = "Set2")
+c <-
+  ggplot(res1,
+         aes(
+           x = ClusterId,
+           y = Recency,
+           group = ClusterId,
+           fill = as.factor(ClusterId)
+         )) +
+  geom_boxplot(show.legend = FALSE) + theme_minimal() + scale_fill_brewer(palette = "Set2")
+grid.arrange(a, b, c, ncol = 3)
+```
+#### Inference: Hierarchical Clustering with 3 Clusters
+
+#### Customers in Cluster 1 are the customers with least average transaction amounts as compared to other customers and this category includes recent item purchasing at an infrequent rate (mostly new customers).
+#### Customers in Cluster 2 are the customers with average transaction amounts, less recent purchases (probably periodic wholesalers or discontinued customers), less important from business marketing and communication point of view.
+#### Customers in Cluster 3 are the customers with high transaction amounts, are frequent buyers, and recent buyers as compared to other customers, hence most important from business point of view.
